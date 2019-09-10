@@ -27,12 +27,24 @@ DBIx::Class::Schema::PgSearchPath
   # Select from table myapp_customer_1.foo
   $schema->set_search_path('myapp_customer_1');
   $schema->resultset('Foo')->all;
-  
+
+  # Read the current search path name
+  say $schema->search_path;
+
   # Select from table myapp_customer_3.foo
   # search_path settings persist accross disconnect/reconnect
   $schema->set_search_path('myapp_customer_3');
+
+  # Pg search path selection will persist across connection manager
+  # disconnect/reconnects
   $schema->storage->disconnect;
   $schema->resultset('Foo')->all;
+
+  # Create a Pg schema
+  $schema->create_search_path('yaph');
+
+  # Destroy a Pg schema
+  $schema->drop_search_path('yaph');
 
 =head1 DESCRIPTION
 
@@ -46,6 +58,9 @@ Useful when a Pg database has multiple Schemas with the same table structure.
 The DBIx::Class::Schema instance can use the same Result classes to operate
 on the independant data sets within the multiple schemas
 
+Module relies heavily on the term B<search path> when referring to a
+PostgreSQL Schema, to avoid naming confusion with DBIx::Class::Schema
+
 =head1 About Schema->connection() parameters
 
 Schema->connection() supports several formats of parameter list
@@ -54,13 +69,27 @@ This module only supports a hashref parameter list, as in the synopsis
 
 =cut
 
-our $VERSION = '0.1';
+our $VERSION = '0.2';
 use Carp qw( croak );
 
 __PACKAGE__->mk_group_accessors(inherited => '_search_path');
 __PACKAGE__->_search_path('public');
 
 =head1 METHODS and FUNCTIONS
+
+=head2 search_path
+
+Return the current value for search_path
+
+=cut
+
+sub search_path {
+  # Protect from accidentally calling search_path() instead of set_search_path()
+  croak 'search_path() accepts no arguments. Use set_search_path() instead'
+    if $_[1];
+
+  shift->_search_path;
+}
 
 =head2 set_search_path pg_schema_name
 
@@ -81,6 +110,34 @@ sub set_search_path {
 
   $self->_search_path( $search_path );
   dbh_do_set_storage_path( $self->storage, $search_path );
+}
+
+=head2 create_search_path search_path
+
+Create a Postgres Schema with the given name
+
+=cut
+
+sub create_search_path {
+  my ( $self, $search_path ) = @_;
+
+  $self->validate_search_path( $search_path );
+
+  $self->dbh_do("CREATE SCHEMA IF NOT EXISTS $search_path;");
+}
+
+=head2 drop_search_path search_path
+
+Destroy a Postgres Schema with the given name
+
+=cut
+
+sub drop_search_path {
+  my ( $self, $search_path ) = @_;
+
+  $self->validate_search_path( $search_path );
+
+  $self->dbh_do("DROP SCHEMA IF EXISTS $search_path CASCADE;");
 }
 
 =head2 validate_search_path pg_schema_name
@@ -146,6 +203,28 @@ sub connection {
   };
 
   return $self->next::method( \%conn );
+}
+
+=head2 dbh_do sql_stm
+
+Execute a single sql statement
+
+Wrapper for schema->storage->dbh_do.  Only appropriate when the statement
+returns no results.
+
+=cut
+
+sub dbh_do {
+  my ( $self, $sql_stm ) = @_;
+
+  $self->storage->dbh_do(
+    sub {
+      my ( $storage, $dbh ) = @_;
+
+      $dbh->do( $sql_stm )
+        or die $dbh->errstr;
+    }
+  );
 }
 
 =head1 BUGS
